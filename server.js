@@ -1,67 +1,61 @@
+
 const express = require("express");
 const http = require("http");
+const cors = require("cors");
 const { Server } = require("socket.io");
 
 const app = express();
+app.use(cors());
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
-    origin: "*"
+    origin: "*", // Permitir todos os frontends
+    methods: ["GET", "POST"]
   }
 });
 
-const salas = {};
+const rooms = {};
 
 io.on("connection", (socket) => {
-  socket.on("entrarNaSala", ({ sala, senha, nome }) => {
-    if (!salas[sala]) {
-      salas[sala] = { jogadores: {}, senha, estado: Array(9).fill(""), turno: "X" };
+  console.log("🔌 Usuário conectado:", socket.id);
+
+  socket.on("joinRoom", ({ roomId, name }) => {
+    socket.join(roomId);
+    socket.username = name;
+    socket.roomId = roomId;
+
+    if (!rooms[roomId]) {
+      rooms[roomId] = [];
     }
 
-    if (salas[sala].senha && salas[sala].senha !== senha) {
-      socket.emit("erro", "Senha incorreta");
-      return;
+    if (rooms[roomId].length < 2) {
+      rooms[roomId].push(socket.id);
+      io.to(roomId).emit("systemMessage", \`\${name} entrou na sala!\`);
     }
 
-    const jogadores = Object.keys(salas[sala].jogadores);
-    if (jogadores.length >= 2) {
-      socket.emit("erro", "Sala cheia");
-      return;
+    // Início do jogo se dois jogadores
+    if (rooms[roomId].length === 2) {
+      io.to(roomId).emit("startGame");
     }
-
-    const simbolo = jogadores.length === 0 ? "X" : "O";
-    salas[sala].jogadores[socket.id] = { nome, simbolo };
-    socket.join(sala);
-
-    io.to(sala).emit("jogadores", Object.values(salas[sala].jogadores));
-    socket.emit("simbolo", simbolo);
-    socket.emit("estado", salas[sala].estado);
   });
 
-  socket.on("jogada", ({ sala, index }) => {
-    const s = salas[sala];
-    if (!s) return;
+  socket.on("chatMessage", ({ roomId, name, text }) => {
+    io.to(roomId).emit("chatMessage", { name, text });
+  });
 
-    const jogador = s.jogadores[socket.id];
-    if (!jogador || s.estado[index] || s.turno !== jogador.simbolo) return;
-
-    s.estado[index] = jogador.simbolo;
-    s.turno = s.turno === "X" ? "O" : "X";
-    io.to(sala).emit("estado", s.estado);
+  socket.on("play", (data) => {
+    socket.to(socket.roomId).emit("play", data);
   });
 
   socket.on("disconnect", () => {
-    for (const sala in salas) {
-      if (salas[sala].jogadores[socket.id]) {
-        delete salas[sala].jogadores[socket.id];
-        io.to(sala).emit("jogadores", Object.values(salas[sala].jogadores));
-        if (Object.keys(salas[sala].jogadores).length === 0) {
-          delete salas[sala];
-        }
-      }
+    const room = rooms[socket.roomId];
+    if (room) {
+      rooms[socket.roomId] = room.filter(id => id !== socket.id);
+      io.to(socket.roomId).emit("systemMessage", \`\${socket.username} saiu da sala.\`);
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log("Servidor no ar na porta", PORT));
+server.listen(PORT, () => console.log("🚀 Servidor rodando na porta", PORT));
